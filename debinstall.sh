@@ -52,7 +52,7 @@ read -rp "  Hostname [debian]: " HOSTNAME
 HOSTNAME="${HOSTNAME:-debian}"
 [[ "$HOSTNAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] || die "Invalid hostname."
 
-ask "Install the GNOME desktop environment (task-gnome-desktop)? [y/N]:"
+ask "Install the GNOME desktop environment (gnome-core)? [y/N]:"
 read -rp "  Choice: " DESKTOP_CHOICE
 [[ "$DESKTOP_CHOICE" =~ ^[Yy]$ ]] && INSTALL_DESKTOP="true" || INSTALL_DESKTOP="false"
 
