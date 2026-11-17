@@ -66,7 +66,7 @@ if command -v apt-get >/dev/null 2>&1; then
 elif command -v pacman >/dev/null 2>&1; then
     if ! command -v debootstrap >/dev/null 2>&1; then
         info "Installing debootstrap via pacman..."
-        pacman -Sy --needed --noconfirm debootstrap
+        pacman -Sy --needed --noconfirm debootstrap libeatmydata
     fi
 else
     die "Unsupported host. Use a Debian/Ubuntu or Arch-based live environment."
