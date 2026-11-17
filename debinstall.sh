@@ -228,12 +228,12 @@ fi
 
 echo "--> Configuring GRUB..."
 if [[ "$BOOT_MODE" == "uefi" ]]; then
-    grub-install --target=x86_64-efi --efi-directory=/boot/efi \
+    sudo grub-install --target=x86_64-efi --efi-directory=/boot/efi \
         --bootloader-id=Debian --recheck
 else
-    grub-install --target=i386-pc "$GRUB_DISK"
+    sudo grub-install --target=i386-pc "$GRUB_DISK"
 fi
-update-grub
+sudo update-grub
 
 echo "--> Provisioning users and credentials..."
 echo "root:${ROOT_PASSWORD}" | chpasswd
