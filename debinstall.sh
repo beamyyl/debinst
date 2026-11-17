@@ -208,6 +208,8 @@ apt-get install -y \
     dbus \
     systemd-sysv
 
+sudo sed -i.bak '/^if \[ "\$(id -u)" -eq 0 \]; then/,/^fi$/c\PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games"' /etc/profile
+
 if [[ "$BOOT_MODE" == "uefi" ]]; then
     apt-get install -y grub-efi-amd64
 else
