@@ -236,11 +236,11 @@ fi
 sudo update-grub
 
 echo "--> Provisioning users and credentials..."
-echo "root:${ROOT_PASSWORD}" | chpasswd
+echo "root:${ROOT_PASSWORD}" | sudo chpasswd
 chsh -s /bin/bash root
 
-useradd -m -s /bin/bash -G sudo,plugdev,netdev,audio,video,input "$NEW_USER"
-echo "${NEW_USER}:${USER_PASSWORD}" | chpasswd
+sudo useradd -m -s /bin/bash -G sudo,plugdev,netdev,audio,video,input "$NEW_USER"
+echo "${NEW_USER}:${USER_PASSWORD}" | sudo chpasswd
 
 rm -f /root/.debian-installer-config
 apt-get clean
