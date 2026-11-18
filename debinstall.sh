@@ -455,6 +455,7 @@ BASE_PKGS+=($FS_PKGS)
 GRAPHICS_REQUIRED=(
     libgl1-mesa-dri libglx-mesa0 libegl-mesa0 libgbm1
     mesa-vulkan-drivers libvulkan1
+    linux-headers-amd64
 )
 OPTIONAL_PKGS=(
     # Video acceleration (FOSS)
