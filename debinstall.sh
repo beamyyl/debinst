@@ -47,8 +47,25 @@ elif command -v pacman >/dev/null 2>&1; then
 else
     die "Unsupported host. Use a Debian/Ubuntu or Arch-based live environment."
 fi
-[[ -z "$(ls -A "$TARGET" 2>/dev/null | grep -vxE 'lost\+found|boot|home' || true)" ]] ||
-    warn "$TARGET is not empty — debootstrap may fail or mix with existing files."
+# Delete everything on the target's root filesystem. Separately mounted
+# filesystems (e.g. /mnt/boot/efi, /mnt/home) are not touched; their mountpoint
+# directories simply fail to delete, which is ignored.
+wipe_target() {
+    info "Wiping $TARGET (separately mounted filesystems are kept)..."
+    find "$TARGET" -xdev -mindepth 1 -depth \
+        ! -path "$TARGET/lost+found" ! -path "$TARGET/lost+found/*" \
+        -exec rm -df {} + 2>/dev/null || true
+}
+
+if [[ -n "$(ls -A "$TARGET" 2>/dev/null | grep -vxE 'lost\+found|boot|home' || true)" ]]; then
+    warn "$TARGET is not empty (leftovers from a previous run?). debootstrap cannot install over existing files."
+    ask "Overwrite: delete everything on $TARGET's root filesystem? Separate mounts like boot/efi and home are kept. [y/N]:"
+    read -rp "  Choice: " WIPE_CHOICE
+    [[ "$WIPE_CHOICE" =~ ^[Yy]$ ]] || die "Aborted. Empty $TARGET or answer 'y' to overwrite."
+    WIPE_TARGET="true"
+else
+    WIPE_TARGET="false"
+fi
 
 echo "Installing Debian '${RELEASE}'. To pick another suite: ./debinstall.sh bookworm | sid"
 echo
@@ -155,16 +172,28 @@ DEBOOTSTRAP_ARGS=(
 KEYRING=/usr/share/keyrings/debian-archive-keyring.gpg
 [[ -f "$KEYRING" ]] && DEBOOTSTRAP_ARGS+=(--keyring="$KEYRING")
 
+[[ "$WIPE_TARGET" == "true" ]] && wipe_target
+
 info "Bootstrapping Debian ${RELEASE} into ${TARGET}..."
 ok=false
 for attempt in 1 2 3; do
+    # A failed attempt leaves half-extracted files that make the next one fail
+    # with "File exists", so start each retry from a clean target.
+    ((attempt > 1)) && wipe_target
     if "${EMD[@]}" debootstrap "${DEBOOTSTRAP_ARGS[@]}" "$RELEASE" "$TARGET" "$MIRROR"; then
         ok=true; break
     fi
     warn "debootstrap failed (attempt $attempt/3), retrying..."
     sleep 3
 done
-$ok || die "debootstrap failed. Check $TARGET/debootstrap/debootstrap.log"
+if ! $ok; then
+    if [[ -f "$TARGET/debootstrap/debootstrap.log" ]]; then
+        echo "----- last lines of $TARGET/debootstrap/debootstrap.log -----" >&2
+        tail -n 25 "$TARGET/debootstrap/debootstrap.log" >&2
+        echo "--------------------------------------------------------------" >&2
+    fi
+    die "debootstrap failed. Full log: $TARGET/debootstrap/debootstrap.log"
+fi
 
 # ---------------------------------------------------------------------------
 # fstab — generated from everything currently mounted under $TARGET
