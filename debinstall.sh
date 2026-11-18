@@ -109,6 +109,17 @@ ask "Install the GNOME desktop environment (gnome-core)? [y/N]:"
 read -rp "  Choice: " DESKTOP_CHOICE
 [[ "$DESKTOP_CHOICE" =~ ^[Yy]$ ]] && INSTALL_DESKTOP="true" || INSTALL_DESKTOP="false"
 
+# Like Ubuntu's "Install third-party software" checkbox: proprietary drivers
+# are installed only for hardware that is actually detected (e.g. Broadcom
+# wl Wi-Fi). NVIDIA GPUs use nouveau. Firmware is always installed in full regardless.
+ask "Install proprietary drivers for detected hardware (e.g. Broadcom Wi-Fi)? [Y/n]:"
+read -rp "  Choice: " PROPRIETARY_CHOICE
+[[ "$PROPRIETARY_CHOICE" =~ ^[Nn]$ ]] && INSTALL_PROPRIETARY="false" || INSTALL_PROPRIETARY="true"
+if [[ "$INSTALL_PROPRIETARY" == "true" ]]; then
+    sb="$(od -An -t u1 /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d0-aa0d-00e098032b8c 2>/dev/null | awk '{print $NF}' || true)"
+    [[ "$sb" == 1 ]] && warn "Secure Boot is ON: proprietary modules are signed with a local DKMS key. Disable Secure Boot, or enroll it after install (mokutil --import /var/lib/dkms/mok.pub)."
+fi
+
 ask "Username for the new user:"
 read -rp "  Username: " NEW_USER
 while [[ -z "$NEW_USER" ]]; do
@@ -168,7 +179,6 @@ DEBOOTSTRAP_ARGS=(
     --arch=amd64
     --components=main,contrib,non-free,non-free-firmware
     --include=ca-certificates,eatmydata,locales
-    --verbose
 )
 KEYRING=/usr/share/keyrings/debian-archive-keyring.gpg
 [[ -f "$KEYRING" ]] && DEBOOTSTRAP_ARGS+=(--keyring="$KEYRING")
@@ -247,6 +257,7 @@ CONFIG_FILE="$TARGET/root/.debian-installer-config"
     printf 'BOOT_MODE=%q\n'       "$BOOT_MODE"
     printf 'GRUB_DISK=%q\n'       "$GRUB_DISK"
     printf 'INSTALL_DESKTOP=%q\n' "$INSTALL_DESKTOP"
+    printf 'INSTALL_PROPRIETARY=%q\n' "$INSTALL_PROPRIETARY"
     printf 'LOCALE=%q\n'          "$LOCALE"
     printf 'TIMEZONE=%q\n'        "$TIMEZONE"
     printf 'FS_PKGS=%q\n'         "${FS_PKGS[*]:-}"
@@ -406,6 +417,12 @@ rm -f /var/lib/man-db/auto-update
 if [[ "$BOOT_MODE" == "bios" ]]; then
     echo "grub-pc grub-pc/install_devices multiselect $GRUB_DISK" | debconf-set-selections
 fi
+# A few firmware packages show a license prompt; accept it up front so the
+# unattended install doesn't fail on them.
+debconf-set-selections <<'LICENSES'
+firmware-ipw2x00 firmware-ipw2x00/license/accepted boolean true
+firmware-ivtv firmware-ivtv/license/accepted boolean true
+LICENSES
 
 dpkg --add-architecture i386
 apt-get update
@@ -426,7 +443,7 @@ available() {
 
 # --- Package selection ------------------------------------------------------
 BASE_PKGS=(
-    linux-image-amd64 firmware-linux network-manager
+    linux-image-amd64 network-manager
     sudo bash locales man-db dbus systemd-sysv systemd-timesyncd
     bash-completion
 )
@@ -447,10 +464,6 @@ OPTIONAL_PKGS=(
     # 32-bit Mesa for Steam / Wine
     libgl1-mesa-dri:i386 libglx-mesa0:i386 libegl-mesa0:i386
     mesa-vulkan-drivers:i386 libvulkan1:i386
-    # Device firmware (needed by the in-kernel FOSS drivers) + CPU microcode
-    firmware-amd-graphics firmware-misc-nonfree firmware-iwlwifi firmware-realtek
-    firmware-atheros firmware-brcm80211 firmware-sof-signed
-    amd64-microcode intel-microcode
 )
 DESKTOP_PKGS=()
 if [[ "$INSTALL_DESKTOP" == "true" ]]; then
@@ -464,6 +477,144 @@ mapfile -t OPTIONAL_OK < <(available "${OPTIONAL_PKGS[@]}")
 echo "--> Installing base system, kernel, Mesa/FOSS drivers${DESKTOP_PKGS:+ and GNOME}..."
 eatmydata apt-get install -y \
     "${BASE_PKGS[@]}" "${GRAPHICS_REQUIRED[@]}" "${OPTIONAL_OK[@]}" "${DESKTOP_PKGS[@]}"
+
+# --- Firmware: ALL of it, like Ubuntu --------------------------------------
+# Ubuntu's kernel package depends on linux-firmware (firmware for every
+# supported device) plus BOTH intel-microcode and amd64-microcode, so any
+# hardware works, including devices plugged in later. Debian splits that into
+# many packages; install every one of them: the whole non-free-firmware
+# component (read from apt's own index) plus the free firmware in main.
+mapfile -t FIRMWARE_ALL < <(
+    for f in /var/lib/apt/lists/*_non-free-firmware_binary-amd64_Packages*; do
+        [[ -e "$f" ]] && /usr/lib/apt/apt-helper cat-file "$f"
+    done | sed -n 's/^Package: //p' |
+        grep -E '^(firmware-|bluez-firmware$|atmel-firmware$|amd64-microcode$|intel-microcode$)' |
+        grep -vE '^(firmware-microbit|firmware-nvidia-tesla)' | sort -u || true
+)
+if ((${#FIRMWARE_ALL[@]} == 0)); then
+    echo "    (could not read the non-free-firmware index; using the built-in list)" >&2
+    FIRMWARE_ALL=(
+        firmware-linux-nonfree firmware-misc-nonfree firmware-amd-graphics
+        firmware-nvidia-graphics firmware-nvidia-gsp firmware-intel-graphics
+        firmware-intel-misc firmware-intel-sound firmware-sof-signed
+        firmware-iwlwifi firmware-realtek firmware-mediatek firmware-atheros
+        firmware-brcm80211 firmware-libertas firmware-ti-connectivity
+        firmware-zd1211 firmware-bnx2 firmware-bnx2x firmware-qlogic
+        firmware-cavium firmware-netronome firmware-netxen firmware-myricom
+        firmware-siano firmware-ivtv firmware-ipw2x00 firmware-samsung
+        firmware-ast firmware-qcom-soc firmware-qcom-media firmware-cirrus
+        firmware-marvell-prestera bluez-firmware atmel-firmware
+        amd64-microcode intel-microcode
+    )
+fi
+# Free firmware lives in main, not non-free-firmware, so add it explicitly.
+mapfile -t FIRMWARE_OK < <(available firmware-linux-free firmware-ath9k-htc \
+    firmware-carl9170 "${FIRMWARE_ALL[@]}" | sort -u)
+
+echo "--> Installing all device firmware + CPU microcode (${#FIRMWARE_OK[@]} packages)..."
+if ! eatmydata apt-get install -y "${FIRMWARE_OK[@]}"; then
+    # One bad package (can happen on sid) must not cost all the others.
+    echo "    bulk firmware install failed; installing packages individually..." >&2
+    for p in "${FIRMWARE_OK[@]}"; do
+        eatmydata apt-get install -y "$p" || echo "    (firmware package failed, skipped: $p)" >&2
+    done
+fi
+mkdir -p /var/log/installer
+printf '%s\n' "${FIRMWARE_OK[@]}" > /var/log/installer/firmware-installed
+
+# --- Proprietary drivers, detected like Ubuntu's ubuntu-drivers -------------
+# ubuntu-drivers matches the machine's hardware IDs (modaliases) against the
+# IDs each driver package declares. Debian publishes the same data in its
+# DEP-11 metadata (Broadcom wl, ...). NVIDIA GPUs use the FOSS nouveau driver
+# (firmware comes from the all-firmware step above), as on a default Ubuntu.
+# /proc, /sys, /dev and /run are bind-mounted from the live system, so this
+# sees the real hardware.
+DRIVER_PKGS=()
+if [[ "$INSTALL_PROPRIETARY" == "true" ]]; then
+    echo "--> Detecting hardware that needs proprietary drivers..."
+    DRV_DIR="$(mktemp -d)"
+    DIST="${TARGET_MIRROR%/}/dists/${TARGET_RELEASE}"
+    {
+        udevadm info --export-db 2>/dev/null | sed -n 's/.* MODALIAS=\(.*\)/\1/p'
+        find /sys/devices -name modalias -type f -exec cat {} + 2>/dev/null
+    } | sort -u > "$DRV_DIR/modalias" || true
+
+    # "package<TAB>alias" for every non-free package that declares hardware IDs
+    if /usr/lib/apt/apt-helper download-file "$DIST/non-free/dep11/Components-amd64.yml.gz" \
+            "$DRV_DIR/non-free.yml.gz" >/dev/null 2>&1; then
+        gzip -dc "$DRV_DIR/non-free.yml.gz" | awk '
+            /^---/                   { pkg = ""; prov = 0; mod = 0; next }
+            /^Package: /             { pkg = $2; next }
+            /^Provides:/             { prov = 1; mod = 0; next }
+            /^[^ ]/                  { prov = 0; mod = 0; next }
+            prov && /^  modaliases:/ { mod = 1; next }
+            prov && /^  [^ -]/       { mod = 0; next }
+            mod && /^  - / {
+                a = substr($0, 5); f = substr(a, 1, 1)
+                if (f == "\"" || f == sprintf("%c", 39)) a = substr(a, 2, length(a) - 2)
+                print pkg "\t" a
+            }' > "$DRV_DIR/aliases"
+    else
+        echo "    (could not download driver metadata; skipping proprietary driver detection)" >&2
+        : > "$DRV_DIR/aliases"
+    fi
+
+    # Aliases are shell globs (kernel fnmatch); convert to anchored regexes.
+    mapfile -t DRIVER_PKGS < <(awk -F'\t' '
+        function glob2re(g,   i, c, out, incls) {
+            out = "^"; incls = 0
+            for (i = 1; i <= length(g); i++) {
+                c = substr(g, i, 1)
+                if (incls) {
+                    if (c == "]") incls = 0
+                    else if (c == "!" && substr(g, i - 1, 1) == "[") c = "^"
+                    out = out c; continue
+                }
+                if (c == "*")                   out = out ".*"
+                else if (c == "?")              out = out "."
+                else if (c == "[")              { incls = 1; out = out c }
+                else if (c ~ /[A-Za-z0-9_:,-]/) out = out c
+                else if (c == "^" || c == "\\") out = out "\\" c
+                else                            out = out "[" c "]"
+            }
+            return out "$"
+        }
+        NR == FNR { dev[++n] = $0; b = $0; sub(/:.*/, "", b); bus[n] = b; next }
+        ($1 in hit) { next }
+        {
+            ab = $2; sub(/:.*/, "", ab); wild = (ab ~ /[*?[]/); re = ""
+            for (i = 1; i <= n; i++) {
+                if (!wild && bus[i] != ab) continue
+                if (re == "") re = glob2re($2)
+                if (dev[i] ~ re) { hit[$1] = 1; print $1; break }
+            }
+        }' "$DRV_DIR/modalias" "$DRV_DIR/aliases")
+    rm -rf "$DRV_DIR"
+
+    if ((${#DRIVER_PKGS[@]})); then
+        mapfile -t DRIVER_OK < <(available linux-headers-amd64 "${DRIVER_PKGS[@]}")
+        echo "--> Installing proprietary drivers: ${DRIVER_OK[*]}"
+        eatmydata apt-get install -y "${DRIVER_OK[@]}"
+
+        # DKMS in a chroot builds for the *host's* running kernel by default,
+        # so build explicitly for every Debian kernel installed in the target
+        # and fail loudly instead of leaving a system without its driver.
+        for kdir in /lib/modules/*; do
+            kver="${kdir##*/}"
+            [[ -d "/usr/src/linux-headers-$kver" ]] || continue
+            dkms autoinstall -k "$kver"
+            if dkms status -k "$kver" | grep -v ': installed' | grep -q .; then
+                dkms status -k "$kver" >&2
+                echo "[FAIL] a proprietary driver did not build for kernel $kver" >&2; exit 1
+            fi
+        done
+        printf '%s\n' "${DRIVER_OK[@]}" > /var/log/installer/drivers-installed
+    else
+        echo "    no hardware needing proprietary drivers found."
+    fi
+fi
+
+update-initramfs -u -k all   # boot image with all firmware / driver changes
 
 # Let regular users have sbin in PATH as well
 sed -i.bak '/^if \[ "\$(id -u)" -eq 0 \]; then/,/^fi$/c\PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games"' /etc/profile
@@ -536,4 +687,8 @@ trap - EXIT
 
 echo
 info "Debian ${RELEASE} has been installed to ${TARGET}."
+info "All firmware + CPU microcode installed (list: /var/log/installer/firmware-installed)."
+if [[ -s "$TARGET/var/log/installer/drivers-installed" ]]; then
+    info "Proprietary drivers installed: $(tr '\n' ' ' < "$TARGET/var/log/installer/drivers-installed")"
+fi
 echo "You can now unmount ${TARGET} and reboot."
