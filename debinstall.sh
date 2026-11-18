@@ -461,7 +461,7 @@ OPTIONAL_PKGS=(
     # Video acceleration (FOSS)
     mesa-va-drivers mesa-vdpau-drivers intel-media-va-driver i965-va-driver
     # Diagnostics: glxinfo/eglinfo, vulkaninfo, vainfo
-    mesa-utils vulkan-tools vainfo
+    mesa-utils vulkan-tools vainfo extrepo
     # 32-bit Mesa for Steam / Wine
     libgl1-mesa-dri:i386 libglx-mesa0:i386 libegl-mesa0:i386
     mesa-vulkan-drivers:i386 libvulkan1:i386
