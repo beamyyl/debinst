@@ -168,6 +168,7 @@ DEBOOTSTRAP_ARGS=(
     --arch=amd64
     --components=main,contrib,non-free,non-free-firmware
     --include=ca-certificates,eatmydata,locales
+    --verbose
 )
 KEYRING=/usr/share/keyrings/debian-archive-keyring.gpg
 [[ -f "$KEYRING" ]] && DEBOOTSTRAP_ARGS+=(--keyring="$KEYRING")
