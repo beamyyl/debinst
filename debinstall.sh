@@ -9,6 +9,10 @@
 #   TIMEZONE=Europe/Berlin            (default: taken from the live system, else UTC)
 set -Eeuo pipefail
 
+# Hosts like Arch have no /usr/sbin in PATH, but Debian keeps useradd, chpasswd
+# etc. there; chroot inherits this PATH, so make sure the sbin dirs are present.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin${PATH:+:$PATH}"
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 info()  { echo -e "${GREEN}[INFO]${NC}  $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
